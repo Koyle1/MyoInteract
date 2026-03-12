@@ -44,11 +44,16 @@ myosuite_myodm_suite = set(gym_registry_specs().keys())-myosuite_env_suite-_curr
 myosuite_env_suite  = myosuite_env_suite | myosuite_myodm_suite
 myosuite_myodm_suite = sorted(myosuite_myodm_suite)
 
-# Register MyoUser Suite
-import myosuite.envs.myo.myouser # noqa
-myosuite_myouser_suite = set(gym_registry_specs().keys())-myosuite_env_suite-_current_gym_envs
-myosuite_env_suite  = myosuite_env_suite | myosuite_myouser_suite
-myosuite_myouser_suite = sorted(myosuite_myouser_suite)
+# Register MyoUser Suite (optional dependency: mujoco_playground + menagerie)
+try:
+    import myosuite.envs.myo.myouser # noqa
+except Exception as exc:
+    print(f"[myosuite] Skipping optional MyoUser suite registration: {exc}")
+    myosuite_myouser_suite = []
+else:
+    myosuite_myouser_suite = set(gym_registry_specs().keys())-myosuite_env_suite-_current_gym_envs
+    myosuite_env_suite  = myosuite_env_suite | myosuite_myouser_suite
+    myosuite_myouser_suite = sorted(myosuite_myouser_suite)
 
 # All myosuite Envs
 myosuite_env_suite = sorted(myosuite_env_suite)
