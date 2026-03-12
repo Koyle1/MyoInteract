@@ -1,0 +1,65 @@
+default:
+    - override hydra/output: local
+    - override hydra/launcher: local
+
+env               :   'myoHandPoseRandom-v0'
+algorithm         :   Dreamer
+seed              :   123
+n_env             :   8
+n_eval_env        :   2
+
+# Dreamer hyperparameters
+batch_size        :   16
+batch_length      :   64
+total_timesteps   :   15000000
+log_interval      :   10000
+jax_platform      :   "cuda"
+jax_compute_dtype :   "bfloat16"
+
+eval_freq : 1000000
+restore_checkpoint_freq : 500000
+save_freq : 10000000
+
+# Dreamer-specific configuration
+train_ratio       :   32
+replay_size       :   100000
+
+# Dreamer optimizer settings
+dreamer_opt:
+    lr             :   4e-5
+    agc            :   0.3
+    beta1          :   0.9
+    beta2          :   0.999
+    momentum       :   true
+    wd             :   0.0
+    schedule       :   'const'
+    warmup         :   1000
+
+# Dreamer world model settings
+dreamer_dyn:
+    typ            :   'rssm'
+    rssm:
+        deter          :   512
+        hidden         :   256
+        stoch          :   32
+        classes        :   64
+        act            :   'silu'
+        norm           :   'rms'
+        unimix         :   0.01
+
+# Loss scales
+loss_scales:
+    rec            :   1.0
+    rew            :   1.0
+    con            :   1.0
+    dyn            :   1.0
+    rep            :   0.1
+    policy         :   1.0
+    value          :   1.0
+    repval         :   0.3
+
+job_name          :   dreamer_${env}
+
+hydra:
+    job:
+        name: ${env}
