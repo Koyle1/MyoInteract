@@ -8,6 +8,7 @@ License :: Under Apache License, Version 2.0 (the "License"); you may not use th
 """Simulation using DeepMind Control Suite."""
 
 import copy
+import inspect
 import logging
 import re
 from typing import Any
@@ -74,6 +75,16 @@ def _patch_dm_control_struct_indexer_compat():
     from dm_control.mujoco import index as dm_index
 
     original = dm_index.struct_indexer
+    # If an older MyoSuite patch is active, unwrap to the raw dm_control target.
+    globals_dict = getattr(original, "__globals__", {})
+    old_original = globals_dict.get("_orig_struct_indexer")
+    if callable(old_original):
+        original = old_original
+    closure = inspect.getclosurevars(original).nonlocals
+    closure_original = closure.get("_orig_struct_indexer")
+    if callable(closure_original):
+        original = closure_original
+
     if getattr(original, "_myosuite_compat_patch", False):
         _DM_STRUCT_INDEXER_PATCHED = True
         return
@@ -81,47 +92,45 @@ def _patch_dm_control_struct_indexer_compat():
     warned_missing = set()
 
     def _patched_struct_indexer(struct, *args, **kwargs):
-        try:
-            return original(struct, *args, **kwargs)
-        except AttributeError as exc:
-            missing_attr = _extract_missing_attr(exc)
-            axis_indexers = kwargs.get("axis_indexers")
-            if axis_indexers is None and len(args) >= 2:
-                axis_indexers = args[1]
-            if not missing_attr or not isinstance(axis_indexers, dict):
-                raise
-            if missing_attr not in axis_indexers:
-                raise
-
-            filtered = {
-                name: indexer
-                for name, indexer in axis_indexers.items()
-                if hasattr(struct, name)
-            }
-            if len(filtered) == len(axis_indexers):
-                raise
-
-            missing_fields = tuple(sorted(set(axis_indexers) - set(filtered)))
-            unseen = [name for name in missing_fields if name not in warned_missing]
-            if unseen:
-                warned_missing.update(unseen)
-                logging.warning(
-                    "dm_control index compatibility: ignoring unsupported "
-                    "field(s) on %s: %s",
-                    type(struct).__name__,
-                    ", ".join(unseen),
-                )
-
-            if len(args) >= 2:
-                retry_args = list(args)
-                retry_args[1] = filtered
-                retry_kwargs = dict(kwargs)
-                retry_kwargs.pop("axis_indexers", None)
+        retry_args = list(args)
+        retry_kwargs = dict(kwargs)
+        while True:
+            try:
                 return original(struct, *retry_args, **retry_kwargs)
+            except AttributeError as exc:
+                missing_attr = _extract_missing_attr(exc)
+                axis_indexers = retry_kwargs.get("axis_indexers")
+                axis_indexers_in_args = False
+                if axis_indexers is None and len(retry_args) >= 2:
+                    axis_indexers = retry_args[1]
+                    axis_indexers_in_args = True
+                if not missing_attr or not isinstance(axis_indexers, dict):
+                    raise
 
-            retry_kwargs = dict(kwargs)
-            retry_kwargs["axis_indexers"] = filtered
-            return original(struct, *args, **retry_kwargs)
+                filtered = {
+                    name: indexer
+                    for name, indexer in axis_indexers.items()
+                    if hasattr(struct, name)
+                }
+                if len(filtered) == len(axis_indexers):
+                    raise
+
+                missing_fields = tuple(sorted(set(axis_indexers) - set(filtered)))
+                unseen = [name for name in missing_fields if name not in warned_missing]
+                if unseen:
+                    warned_missing.update(unseen)
+                    logging.warning(
+                        "dm_control index compatibility: ignoring unsupported "
+                        "field(s) on %s: %s",
+                        type(struct).__name__,
+                        ", ".join(unseen),
+                    )
+
+                if axis_indexers_in_args:
+                    retry_args[1] = filtered
+                    retry_kwargs.pop("axis_indexers", None)
+                else:
+                    retry_kwargs["axis_indexers"] = filtered
 
     _patched_struct_indexer._myosuite_compat_patch = True
     dm_index.struct_indexer = _patched_struct_indexer
