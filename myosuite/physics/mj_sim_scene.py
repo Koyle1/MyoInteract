@@ -17,6 +17,36 @@ from myosuite.utils.prompt_utils import prompt, Prompt
 import_utils.dm_control_isavailable()
 import_utils.mujoco_isavailable()
 import dm_control.mujoco as dm_mujoco
+try:
+    import numpy as _np
+    from dm_control.mujoco import index as _dm_index
+
+    if not getattr(_dm_index, "_myosuite_struct_patch", False):
+        _orig_struct_indexer = _dm_index.struct_indexer
+
+        def _patched_struct_indexer(struct, *args, **kwargs):
+            try:
+                return _orig_struct_indexer(struct, *args, **kwargs)
+            except AttributeError as exc:
+                if "light_directional" not in str(exc):
+                    raise
+
+                class _Proxy:
+                    def __init__(self, obj):
+                        self._obj = obj
+                        self.light_directional = _np.zeros(
+                            getattr(obj, "nlight", 0), dtype=_np.int32
+                        )
+
+                    def __getattr__(self, name):
+                        return getattr(self._obj, name)
+
+                return _orig_struct_indexer(_Proxy(struct), *args, **kwargs)
+
+        _dm_index.struct_indexer = _patched_struct_indexer
+        _dm_index._myosuite_struct_patch = True
+except Exception:
+    pass
 
 from myosuite.renderer.mj_renderer import MJRenderer
 from myosuite.physics.sim_scene import SimScene
