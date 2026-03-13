@@ -20,7 +20,7 @@ defaults:
   errfile: False
 
   logger:
-    outputs: [jsonl, scope]
+    outputs: [jsonl, tensorboard]
     filter: 'score|length|fps|ratio|train/loss/|train/rand/'
     timer: True
     fps: 15

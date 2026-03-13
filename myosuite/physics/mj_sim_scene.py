@@ -9,6 +9,7 @@ License :: Under Apache License, Version 2.0 (the "License"); you may not use th
 
 import copy
 import logging
+import re
 from typing import Any
 
 import myosuite.utils.import_utils as import_utils
@@ -19,6 +20,82 @@ import dm_control.mujoco as dm_mujoco
 
 from myosuite.renderer.mj_renderer import MJRenderer
 from myosuite.physics.sim_scene import SimScene
+
+_DM_STRUCT_INDEXER_PATCHED = False
+
+
+def _extract_missing_attr(exc: AttributeError):
+    match = re.search(r"has no attribute '([^']+)'", str(exc))
+    return match.group(1) if match else None
+
+
+def _patch_dm_control_struct_indexer_compat():
+    """Patch dm_control indexer to tolerate mujoco/dm_control field drift.
+
+    Some Mujoco + dm_control version combinations disagree on mjModel/mjData
+    field names (for example `light_directional` or `C_colind`). dm_control
+    builds a static field map and crashes on missing fields. For robustness,
+    filter unavailable fields and retry once.
+    """
+    global _DM_STRUCT_INDEXER_PATCHED
+    if _DM_STRUCT_INDEXER_PATCHED:
+        return
+
+    from dm_control.mujoco import index as dm_index
+
+    original = dm_index.struct_indexer
+    if getattr(original, "_myosuite_compat_patch", False):
+        _DM_STRUCT_INDEXER_PATCHED = True
+        return
+
+    warned_missing = set()
+
+    def _patched_struct_indexer(struct, *args, **kwargs):
+        try:
+            return original(struct, *args, **kwargs)
+        except AttributeError as exc:
+            missing_attr = _extract_missing_attr(exc)
+            axis_indexers = kwargs.get("axis_indexers")
+            if axis_indexers is None and len(args) >= 2:
+                axis_indexers = args[1]
+            if not missing_attr or not isinstance(axis_indexers, dict):
+                raise
+            if missing_attr not in axis_indexers:
+                raise
+
+            filtered = {
+                name: indexer
+                for name, indexer in axis_indexers.items()
+                if hasattr(struct, name)
+            }
+            if len(filtered) == len(axis_indexers):
+                raise
+
+            missing_fields = tuple(sorted(set(axis_indexers) - set(filtered)))
+            unseen = [name for name in missing_fields if name not in warned_missing]
+            if unseen:
+                warned_missing.update(unseen)
+                logging.warning(
+                    "dm_control index compatibility: ignoring unsupported "
+                    "field(s) on %s: %s",
+                    type(struct).__name__,
+                    ", ".join(unseen),
+                )
+
+            if len(args) >= 2:
+                retry_args = list(args)
+                retry_args[1] = filtered
+                retry_kwargs = dict(kwargs)
+                retry_kwargs.pop("axis_indexers", None)
+                return original(struct, *retry_args, **retry_kwargs)
+
+            retry_kwargs = dict(kwargs)
+            retry_kwargs["axis_indexers"] = filtered
+            return original(struct, *args, **retry_kwargs)
+
+    _patched_struct_indexer._myosuite_compat_patch = True
+    dm_index.struct_indexer = _patched_struct_indexer
+    _DM_STRUCT_INDEXER_PATCHED = True
 
 
 class DMSimScene(SimScene):
@@ -34,6 +111,7 @@ class DMSimScene(SimScene):
         Returns:
             A dm_control Physics object.
         """
+        _patch_dm_control_struct_indexer_compat()
         if isinstance(model_handle, str):
             if model_handle.endswith('.xml'):
                 sim = dm_mujoco.Physics.from_xml_path(model_handle)

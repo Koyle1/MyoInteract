@@ -10,7 +10,7 @@ This is a launcher script for launching SAC training using hydra.
 import os
 import time as timer
 import hydra
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig, OmegaConf, open_dict
 from sb3_job_script import train_loop
 from myosuite.utils import gym
 
@@ -27,7 +27,9 @@ def configure_jobs(job_data):
 
     assert any([job_data.algorithm == a for a in ['SAC', 'PPO', 'Dreamer']])
     
-    job_data.alg_hyper_params = dict() if 'alg_hyper_params' not in job_data.keys() else job_data.alg_hyper_params
+    if 'alg_hyper_params' not in job_data.keys():
+        with open_dict(job_data):
+            job_data.alg_hyper_params = {}
 
     with open('job_config.json', 'w') as fp:
         OmegaConf.save(config=job_data, f=fp.name)

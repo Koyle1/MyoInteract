@@ -11,15 +11,7 @@ import os
 import sys
 import json
 import myosuite
-from stable_baselines3 import PPO, SAC
-from stable_baselines3.common.callbacks import CheckpointCallback
-from stable_baselines3.common.env_util import make_vec_env
-from stable_baselines3.common.logger import configure
-from stable_baselines3.common.vec_env import VecNormalize
-import torch
 from omegaconf import OmegaConf
-
-from in_callbacks import InfoCallback, FallbackCheckpoint, EvalCallback
 
 IS_WnB_enabled = False
 try:
@@ -34,6 +26,15 @@ def train_loop(job_data) -> None:
     if algo == 'Dreamer':
         train_loop_dreamer(job_data)
         return
+
+    # Lazy SB3 imports so Dreamer can run without stable-baselines3 installed.
+    import torch
+    from stable_baselines3 import PPO, SAC
+    from stable_baselines3.common.callbacks import CheckpointCallback
+    from stable_baselines3.common.env_util import make_vec_env
+    from stable_baselines3.common.logger import configure
+    from stable_baselines3.common.vec_env import VecNormalize
+    from in_callbacks import InfoCallback, FallbackCheckpoint, EvalCallback
 
     config = {
             "policy_type": job_data.policy,
@@ -164,6 +165,7 @@ def train_loop_dreamer(job_data) -> None:
     _append_nested_flags(args, "agent.opt", _as_plain_dict(job_data, "dreamer_opt"))
     _append_nested_flags(args, "agent.dyn", _as_plain_dict(job_data, "dreamer_dyn"))
     _append_nested_flags(args, "agent.loss_scales", _as_plain_dict(job_data, "loss_scales"))
+    args = [str(arg) for arg in args if arg is not None]
 
     print("Launching Dreamer with args:")
     print(" ".join(args))
@@ -186,6 +188,8 @@ def _as_plain_dict(job_data, key):
 
 def _append_nested_flags(args, prefix, mapping):
     for key, value in mapping.items():
+        if value is None:
+            continue
         flag = f"{prefix}.{key}"
         if isinstance(value, dict):
             _append_nested_flags(args, flag, value)
@@ -195,7 +199,8 @@ def _append_nested_flags(args, prefix, mapping):
 
 def _format_flag_value(value):
     if isinstance(value, bool):
-        return "true" if value else "false"
+        # elements.Flags expects Python-style bool tokens.
+        return "True" if value else "False"
     if isinstance(value, (list, tuple, dict)):
         return json.dumps(value)
     return str(value)
