@@ -23,6 +23,8 @@ save_freq : 10000000
 # Dreamer-specific configuration
 train_ratio       :   32
 replay_size       :   100000
+dreamer_run       :   {}
+dreamer_jax       :   {}
 
 # Dreamer optimizer settings
 dreamer_opt:

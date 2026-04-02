@@ -3,6 +3,7 @@
 # ./train_myosuite.sh myo slurm mjrl   # use mjrl with slurm launcher
 # ./train_myosuite.sh myo local sb3   # use stable-baselines3 with local launcher
 # ./train_myosuite.sh myo slurm sb3   # use stable-baselines3 with slurm launcher
+# ./train_myosuite.sh myo local epo   # use the JAX EPO trainer with local launcher
 
 # Configure launch
 if [ "$2" == 'local' ] ; then
@@ -41,6 +42,10 @@ elif [ "$3" == "sb3" ] ; then
     fi
     # Disp SB3 commands
     echo "Stable-Baselines3: ======="
+    echo "python hydra_sb3_launcher.py --config-path config $config env=$envs"
+elif [ "$3" == "epo" ] ; then
+    config="--config-name hydra_myo_epo_config.yaml $config"
+    echo "JAX EPO: ======="
     echo "python hydra_sb3_launcher.py --config-path config $config env=$envs"
 else
     echo "Unknown training framework"

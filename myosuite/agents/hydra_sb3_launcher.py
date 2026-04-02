@@ -17,7 +17,7 @@ from myosuite.utils import gym
 # ===============================================================================
 # Process Inputs and configure job
 # ===============================================================================
-@hydra.main(config_name="hydra_sb3_config", config_path="config")
+@hydra.main(version_base=None, config_name="hydra_sb3_config", config_path="config")
 def configure_jobs(job_data):
     print("========================================")
     print("Job Configuration")
@@ -25,7 +25,7 @@ def configure_jobs(job_data):
 
     assert 'algorithm' in job_data.keys()
 
-    assert any([job_data.algorithm == a for a in ['SAC', 'PPO', 'Dreamer']])
+    assert any([job_data.algorithm == a for a in ['SAC', 'PPO', 'Dreamer', 'EPO']])
     
     if 'alg_hyper_params' not in job_data.keys():
         with open_dict(job_data):

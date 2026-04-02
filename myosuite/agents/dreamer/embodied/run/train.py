@@ -61,15 +61,23 @@ def train(make_agent, make_replay, make_env, make_stream, make_logger, args):
   driver.on_step(replay.add)
   driver.on_step(logfn)
 
-  stream_train = iter(agent.stream(make_stream(replay, 'train')))
-  stream_report = iter(agent.stream(make_stream(replay, 'report')))
+  stream_train = None
+  stream_report = None
 
   carry_train = [agent.init_train(args.batch_size)]
   carry_report = agent.init_report(args.batch_size)
 
+  def ensure_streams():
+    nonlocal stream_train, stream_report
+    if stream_train is None:
+      stream_train = iter(agent.stream(make_stream(replay, 'train')))
+    if stream_report is None:
+      stream_report = iter(agent.stream(make_stream(replay, 'report')))
+
   def trainfn(tran, worker):
     if len(replay) < args.batch_size * args.batch_length:
       return
+    ensure_streams()
     for _ in range(should_train(step)):
       with elements.timer.section('stream_next'):
         batch = next(stream_train)
@@ -90,6 +98,7 @@ def train(make_agent, make_replay, make_env, make_stream, make_logger, args):
   cp.load_or_save()
 
   print('Start training loop')
+  print('First policy step may take a while due to JAX compilation.')
   policy = lambda *args: agent.policy(*args, mode='train')
   driver.reset(agent.init_policy)
   while step < args.steps:
@@ -97,6 +106,7 @@ def train(make_agent, make_replay, make_env, make_stream, make_logger, args):
     driver(policy, steps=10)
 
     if should_report(step) and len(replay):
+      ensure_streams()
       agg = elements.Agg()
       for _ in range(args.consec_report * args.report_batches):
         carry_report, mets = agent.report(carry_report, next(stream_report))

@@ -153,6 +153,23 @@ def make_agent(config):
 
 
 def make_logger(config):
+  class _SafeOutput:
+    def __init__(self, name, output):
+      self._name = name
+      self._output = output
+      self._disabled = False
+
+    def __call__(self, metrics):
+      if self._disabled:
+        return
+      try:
+        self._output(metrics)
+      except Exception as exc:
+        self._disabled = True
+        elements.print(
+            f'{self._name} output disabled after error: {exc}',
+            color='yellow')
+
   step = elements.Counter()
   logdir = config.logdir
   multiplier = config.env.get(config.task.split('_')[0], {}).get('repeat', 1)
@@ -164,8 +181,9 @@ def make_logger(config):
       outputs.append(elements.logger.JSONLOutput(
           logdir, 'scores.jsonl', 'episode/score'))
     elif output == 'tensorboard':
-      outputs.append(elements.logger.TensorBoardOutput(
-          logdir, config.logger.fps))
+      outputs.append(_SafeOutput(
+          'TensorBoard',
+          elements.logger.TensorBoardOutput(logdir, config.logger.fps)))
     elif output == 'expa':
       exp = logdir.split('/')[-4]
       run = '/'.join(logdir.split('/')[-3:])
@@ -174,7 +192,12 @@ def make_logger(config):
           exp, run, proj, config.logger.user, config.flat))
     elif output == 'wandb':
       name = '/'.join(logdir.split('/')[-4:])
-      outputs.append(elements.logger.WandBOutput(name))
+      try:
+        outputs.append(_SafeOutput('WandB', elements.logger.WandBOutput(name)))
+      except Exception as exc:
+        elements.print(
+            f'WandB output disabled (failed to initialize): {exc}',
+            color='yellow')
     elif output == 'scope':
       outputs.append(elements.logger.ScopeOutput(elements.Path(logdir)))
     else:

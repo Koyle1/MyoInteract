@@ -60,14 +60,30 @@ def _extract_missing_attr(exc: AttributeError):
     return match.group(1) if match else None
 
 
-def _patch_dm_control_struct_indexer_compat():
-    """Patch dm_control indexer to tolerate mujoco/dm_control field drift.
+def _indexer_field_name(key, indexer):
+    """Best-effort extraction of a dm_control field name from an axis indexer."""
+    if isinstance(key, str):
+        return key
+    for attr in ("field_name", "_field_name", "name", "_name"):
+        value = getattr(indexer, attr, None)
+        if isinstance(value, str):
+            return value
+    for attr in ("field", "_field", "spec", "_spec"):
+        value = getattr(indexer, attr, None)
+        if isinstance(value, str):
+            return value
+        if isinstance(value, tuple) and value and isinstance(value[0], str):
+            return value[0]
+        value_name = getattr(value, "name", None)
+        if isinstance(value_name, str):
+            return value_name
+    if isinstance(indexer, (tuple, list)) and indexer and isinstance(indexer[0], str):
+        return indexer[0]
+    return None
 
-    Some Mujoco + dm_control version combinations disagree on mjModel/mjData
-    field names (for example `light_directional` or `C_colind`). dm_control
-    builds a static field map and crashes on missing fields. For robustness,
-    filter unavailable fields and retry once.
-    """
+
+def _patch_dm_control_struct_indexer_compat():
+    """Patch dm_control indexer to tolerate mujoco/dm_control field drift."""
     global _DM_STRUCT_INDEXER_PATCHED
     if _DM_STRUCT_INDEXER_PATCHED:
         return
@@ -75,13 +91,11 @@ def _patch_dm_control_struct_indexer_compat():
     from dm_control.mujoco import index as dm_index
 
     original = dm_index.struct_indexer
-    # If an older MyoSuite patch is active, unwrap to the raw dm_control target.
     globals_dict = getattr(original, "__globals__", {})
     old_original = globals_dict.get("_orig_struct_indexer")
     if callable(old_original):
         original = old_original
-    closure = inspect.getclosurevars(original).nonlocals
-    closure_original = closure.get("_orig_struct_indexer")
+    closure_original = inspect.getclosurevars(original).nonlocals.get("_orig_struct_indexer")
     if callable(closure_original):
         original = closure_original
 
@@ -90,6 +104,13 @@ def _patch_dm_control_struct_indexer_compat():
         return
 
     warned_missing = set()
+    def _empty_named_struct():
+        try:
+            return dm_index.make_struct_indexer({})
+        except Exception:
+            class _EmptyStruct:
+                pass
+            return _EmptyStruct()
 
     def _patched_struct_indexer(struct, *args, **kwargs):
         retry_args = list(args)
@@ -104,27 +125,58 @@ def _patch_dm_control_struct_indexer_compat():
                 if axis_indexers is None and len(retry_args) >= 2:
                     axis_indexers = retry_args[1]
                     axis_indexers_in_args = True
-                if not missing_attr or not isinstance(axis_indexers, dict):
+                if not missing_attr:
                     raise
 
-                filtered = {
-                    name: indexer
-                    for name, indexer in axis_indexers.items()
-                    if hasattr(struct, name)
-                }
-                if len(filtered) == len(axis_indexers):
+                if isinstance(axis_indexers, dict):
+                    indexed = list(axis_indexers.items())
+                    axis_kind = "dict"
+                elif isinstance(axis_indexers, (list, tuple)):
+                    indexed = list(enumerate(axis_indexers))
+                    axis_kind = "seq"
+                else:
                     raise
 
-                missing_fields = tuple(sorted(set(axis_indexers) - set(filtered)))
-                unseen = [name for name in missing_fields if name not in warned_missing]
+                kept = []
+                removed = []
+                for key, indexer in indexed:
+                    field_name = _indexer_field_name(key, indexer)
+                    drop = False
+                    if isinstance(field_name, str):
+                        drop = field_name == missing_attr
+                    elif isinstance(key, str):
+                        drop = key == missing_attr
+                    else:
+                        drop = missing_attr in repr(indexer)
+                    if drop:
+                        removed.append(field_name or str(key))
+                    else:
+                        kept.append((key, indexer))
+
+                if not removed:
+                    logging.warning(
+                        "dm_control index compatibility: unresolved missing "
+                        "field '%s' on %s; using empty named-index fallback.",
+                        missing_attr,
+                        type(struct).__name__,
+                    )
+                    return _empty_named_struct()
+
+                unseen = [name for name in removed if name not in warned_missing]
                 if unseen:
                     warned_missing.update(unseen)
                     logging.warning(
-                        "dm_control index compatibility: ignoring unsupported "
-                        "field(s) on %s: %s",
+                        "dm_control index compatibility: ignoring unsupported field(s) on %s: %s",
                         type(struct).__name__,
                         ", ".join(unseen),
                     )
+
+                if axis_kind == "dict":
+                    filtered = {key: indexer for key, indexer in kept}
+                elif isinstance(axis_indexers, list):
+                    filtered = [indexer for _, indexer in kept]
+                else:
+                    filtered = tuple(indexer for _, indexer in kept)
 
                 if axis_indexers_in_args:
                     retry_args[1] = filtered

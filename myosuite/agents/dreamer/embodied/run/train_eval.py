@@ -82,17 +82,27 @@ def train_eval(
   driver_eval.on_step(bind(logfn, mode='eval'))
   driver_eval.on_step(lambda tran, _: policy_fps.step())
 
-  stream_train = iter(agent.stream(make_stream(replay_train, 'train')))
-  stream_report = iter(agent.stream(make_stream(replay_train, 'report')))
-  stream_eval = iter(agent.stream(make_stream(replay_eval, 'eval')))
+  stream_train = None
+  stream_report = None
+  stream_eval = None
 
   carry_train = [agent.init_train(args.batch_size)]
   carry_report = agent.init_report(args.batch_size)
   carry_eval = agent.init_report(args.batch_size)
 
+  def ensure_streams():
+    nonlocal stream_train, stream_report, stream_eval
+    if stream_train is None:
+      stream_train = iter(agent.stream(make_stream(replay_train, 'train')))
+    if stream_report is None:
+      stream_report = iter(agent.stream(make_stream(replay_train, 'report')))
+    if stream_eval is None:
+      stream_eval = iter(agent.stream(make_stream(replay_eval, 'eval')))
+
   def trainfn(tran, worker):
     if len(replay_train) < args.batch_size * args.batch_length:
       return
+    ensure_streams()
     for _ in range(should_train(step)):
       with elements.timer.section('stream_next'):
         batch = next(stream_train)
@@ -123,6 +133,7 @@ def train_eval(
   should_save(step)  # Register that we just saved.
 
   print('Start training loop')
+  print('First policy step may take a while due to JAX compilation.')
   train_policy = lambda *args: agent.policy(*args, mode='train')
   eval_policy = lambda *args: agent.policy(*args, mode='eval')
   driver_train.reset(agent.init_policy)
@@ -134,9 +145,11 @@ def train_eval(
       driver_eval(eval_policy, episodes=args.eval_eps)
       logger.add(eval_epstats.result(), prefix='epstats')
       if len(replay_train):
+        ensure_streams()
         carry_report, mets = reportfn(carry_report, stream_report)
         logger.add(mets, prefix='report')
       if len(replay_eval):
+        ensure_streams()
         carry_eval, mets = reportfn(carry_eval, stream_eval)
         logger.add(mets, prefix='eval')
 

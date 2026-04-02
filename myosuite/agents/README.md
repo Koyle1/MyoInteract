@@ -93,6 +93,28 @@ python torchrl_job_script.py
 
 </details>
 
+## JAX EPO
+
+This repo now includes a JAX-style evolutionary policy optimization trainer for continuous-control MyoSuite tasks. It uses a latent-conditioned actor-critic with PPO updates and evolves a latent gene pool between rollout batches.
+
+<details>
+<summary>Expand for installation and training details</summary>
+
+Install the JAX stack from the project dependencies in `pyproject.toml` or ensure `jax`, `flax`, and `optax` are available in your environment.
+
+### Launch training
+```bash
+sh train_myosuite.sh myo local epo
+```
+
+The default Hydra config lives in `config/hydra_myo_epo_config.yaml`. A typical single-env override looks like:
+
+```bash
+python hydra_sb3_launcher.py --config-path config --config-name hydra_myo_epo_config.yaml env=myoElbowPose1D6MRandom-v0
+```
+
+</details>
+
 ## [SAR-RL](https://sites.google.com/view/sar-rl/)
 [SAR-RL](https://sites.google.com/view/sar-rl/) builds and leverages SAR (Synergistic Action Representations) to solve some of the toughest problems in high-dimensional continuous control.
 
@@ -184,4 +206,3 @@ url={https://openreview.net/forum?id=C-xa_D3oTj6}
 }
 ```
 </details>
-

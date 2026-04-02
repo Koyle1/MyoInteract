@@ -1,0 +1,54 @@
+default:
+    - override hydra/output: local
+    - override hydra/launcher: local
+
+env               :   'myoElbowPose1D6MRandom-v0'
+algorithm         :   EPO
+seed              :   123
+n_env             :   8
+n_eval_env        :   2
+
+# JAX runtime
+jax_platform      :   "cpu"
+xla_preallocate   :   false
+
+# PPO-style optimization
+learning_rate     :   3e-4
+gamma             :   0.99
+gae_lambda        :   0.95
+clip_epsilon      :   0.2
+entropy_coef      :   1e-3
+value_coef        :   0.5
+max_grad_norm     :   1.0
+total_timesteps   :   5000000
+rollout_length    :   256
+update_epochs     :   4
+minibatch_size    :   1024
+
+# Latent-conditioned policy/value network
+hidden_sizes      :   [256, 256]
+latent_hidden_size:   128
+latent_dim        :   32
+
+# Evolutionary latent pool
+pool_size         :   64
+latent_scale      :   1.0
+elite_fraction    :   0.25
+mutation_std      :   0.15
+mutation_clip     :   3.0
+crossover_rate    :   0.5
+fitness_ema       :   0.5
+evolution_warmup_updates : 1
+
+# Logging / evaluation
+log_interval      :   10
+eval_episodes     :   5
+eval_freq         :   200000
+save_freq         :   500000
+
+alg_hyper_params  :   {}
+job_name          :   epo_${env}
+
+hydra:
+    job:
+        name: ${env}

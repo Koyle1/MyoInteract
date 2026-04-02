@@ -11,6 +11,7 @@ import os
 import sys
 import json
 import myosuite
+import numpy as np
 from omegaconf import OmegaConf
 
 IS_WnB_enabled = False
@@ -23,6 +24,13 @@ except ImportError as e:
 
 def train_loop(job_data) -> None:
     algo = job_data.algorithm
+    if algo == 'EPO':
+        _configure_jax_runtime(job_data)
+        from epo_jax import train_loop as train_loop_epo
+
+        train_loop_epo(job_data)
+        return
+
     if algo == 'Dreamer':
         train_loop_dreamer(job_data)
         return
@@ -32,28 +40,63 @@ def train_loop(job_data) -> None:
     from stable_baselines3 import PPO, SAC
     from stable_baselines3.common.callbacks import CheckpointCallback
     from stable_baselines3.common.env_util import make_vec_env
-    from stable_baselines3.common.logger import configure
+    from stable_baselines3.common.logger import KVWriter, configure
     from stable_baselines3.common.vec_env import VecNormalize
     from in_callbacks import InfoCallback, FallbackCheckpoint, EvalCallback
+
+    class WandbOutputFormat(KVWriter):
+        def write(self, key_values, key_excluded, step=0):
+            metrics = {}
+            for key, value in key_values.items():
+                if "wandb" in key_excluded.get(key, ()):
+                    continue
+                if isinstance(value, np.generic):
+                    value = value.item()
+                if isinstance(value, (bool, int, float)):
+                    metrics[key] = value
+            if metrics:
+                wandb.log(metrics, step=step)
+
+        def close(self):
+            pass
 
     config = {
             "policy_type": job_data.policy,
             "total_timesteps": job_data.total_timesteps,
             "env_name": job_data.env,
     }
-    if IS_WnB_enabled:
-        run = wandb.init(
-            project="sb3_hand",
-            config=config,
-            sync_tensorboard=True,  # auto-upload sb3's tensorboard metrics
-            monitor_gym=True,  # auto-upload the videos of agents playing the game
-            save_code=True,  # optional
-        )
-        tensorboard_log = f"wandb/{run.id}"
-    else:
-        tensorboard_log = None
+    use_wandb = IS_WnB_enabled
+    run = None
+    sync_tensorboard = False
+    if use_wandb:
+        # Default off: avoids hard dependency on tensorboard for SB3 runs.
+        sync_tensorboard = _as_bool(getattr(job_data, "wandb_sync_tensorboard", False))
+        if sync_tensorboard:
+            try:
+                import tensorboard  # noqa: F401
+            except ImportError:
+                sync_tensorboard = False
+                print("tensorboard is not installed; disabling wandb tensorboard sync.")
+        if not sync_tensorboard:
+            # Prevent env-level overrides from forcing tensorboard patching.
+            os.environ["WANDB_TENSORBOARD"] = "false"
+        try:
+            run = wandb.init(
+                project="sb3_hand",
+                config=config,
+                sync_tensorboard=sync_tensorboard,
+                monitor_gym=True,  # auto-upload the videos of agents playing the game
+                save_code=True,  # optional
+            )
+        except Exception as exc:
+            use_wandb = False
+            print(f"W&B initialization failed; continuing without W&B logging: {exc}")
+
+    tensorboard_log = f"wandb/{run.id}" if (run and sync_tensorboard) else None
     
     log = configure(f'results_{job_data.env}')
+    if use_wandb and run is not None and not sync_tensorboard:
+        log.output_formats.append(WandbOutputFormat())
     # Create the vectorized environment and normalize ob
     env = make_vec_env(job_data.env, n_envs=job_data.n_env)
     env = VecNormalize(env, norm_obs=True, norm_reward=False, clip_obs=10.)
@@ -83,6 +126,8 @@ def train_loop(job_data) -> None:
     else:
         raise ValueError(f"Unsupported algorithm '{algo}'")
 
+    model.set_logger(log)
+
     if job_data.job_name =="checkpoint.pt":
         foldername = os.path.join(os.path.dirname(os.path.realpath(__file__)), f"baseline_SB3/myoChal24/{job_data.env}")
         file_path = os.path.join(foldername, job_data.job_name)
@@ -94,7 +139,7 @@ def train_loop(job_data) -> None:
     else:
         print("No checkpoint loaded, training starts.")
 
-    if IS_WnB_enabled:
+    if use_wandb:
         callback = [WandbCallback(
                 model_save_path=f"models/{run.id}",
                 verbose=2,
@@ -113,12 +158,10 @@ def train_loop(job_data) -> None:
         callback=callback,
     )
 
-    model.set_logger(log)
-
     model.save(f"{job_data.env}_"+algo+"_model")
     env.save(f'{job_data.env}_'+algo+'_env')
 
-    if IS_WnB_enabled:
+    if use_wandb and run is not None:
         run.finish()
 
 
@@ -165,6 +208,8 @@ def train_loop_dreamer(job_data) -> None:
     _append_nested_flags(args, "agent.opt", _as_plain_dict(job_data, "dreamer_opt"))
     _append_nested_flags(args, "agent.dyn", _as_plain_dict(job_data, "dreamer_dyn"))
     _append_nested_flags(args, "agent.loss_scales", _as_plain_dict(job_data, "loss_scales"))
+    _append_nested_flags(args, "run", _as_plain_dict(job_data, "dreamer_run"))
+    _append_nested_flags(args, "jax", _as_plain_dict(job_data, "dreamer_jax"))
     args = [str(arg) for arg in args if arg is not None]
 
     print("Launching Dreamer with args:")
@@ -204,3 +249,20 @@ def _format_flag_value(value):
     if isinstance(value, (list, tuple, dict)):
         return json.dumps(value)
     return str(value)
+
+
+def _as_bool(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "t", "yes", "y", "on"}
+    return bool(value)
+
+
+def _configure_jax_runtime(job_data) -> None:
+    jax_platform = getattr(job_data, "jax_platform", None)
+    if jax_platform:
+        os.environ.setdefault("JAX_PLATFORMS", str(jax_platform))
+    xla_preallocate = getattr(job_data, "xla_preallocate", None)
+    if xla_preallocate is not None and not _as_bool(xla_preallocate):
+        os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")

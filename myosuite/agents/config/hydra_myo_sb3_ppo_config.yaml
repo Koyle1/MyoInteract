@@ -24,12 +24,12 @@ save_freq : 10000000
 
 policy_kwargs:                                              # Policy parameters (initial STD and architecture)
   net_arch:
-    - pi: [256, 128]
-      vf: [256, 128]
+    pi: [256, 128]
+    vf: [256, 128]
 
 
 # Algorithm hyperparameters : if alg requires additional params, can be specified here (or defaults will be used)
-alg_hyper_params  :   {'device': 'cuda'}
+alg_hyper_params  :   {'device': 'auto'}
 
 job_name          :   ppo_sb3_${env}
 
