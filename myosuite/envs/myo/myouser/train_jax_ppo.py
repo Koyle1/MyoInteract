@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-"""Train a PPO agent using JAX on the specified environment."""
+"""Train a JAX RL agent on the specified environment."""
 
 import os
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"

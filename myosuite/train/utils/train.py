@@ -23,6 +23,7 @@ from collections import defaultdict
 
 from myosuite.train.myouser.custom_ppo import train as ppo
 from myosuite.train.myouser.custom_ppo import networks_vision_unified as networks
+from myosuite.train.myouser.custom_epo import train as epo
 from myosuite.train.utils.wrapper import wrap_myosuite_training, _maybe_wrap_env_for_evaluation
 from myosuite.envs.myo.myouser.evaluate import evaluate_policy
 from myosuite.envs.myo.myouser.utils import render_traj
@@ -349,6 +350,7 @@ def train_or_load_checkpoint(env_name,
     # env_cfg = registry.get_default_config(env_name)  #default_config()
     env_cfg = config.env
     ppo_params = config.rl
+    algorithm = str(getattr(ppo_params, "algorithm", "PPO")).upper()
     if eval_mode:
         ppo_params.num_timesteps = 0  #only load the model, do not train
 
@@ -401,6 +403,23 @@ def train_or_load_checkpoint(env_name,
     training_params = dict(ppo_params)
     if "network_factory" in training_params:
         del training_params["network_factory"]
+    if "algorithm" in training_params:
+        del training_params["algorithm"]
+
+    epo_only_params = {
+        "gae_lambda",
+        "latent_dim",
+        "latent_hidden_size",
+        "pool_size",
+        "latent_scale",
+        "elite_fraction",
+        "mutation_std",
+        "mutation_clip",
+        "crossover_rate",
+        "fitness_ema",
+        "evolution_warmup_updates",
+        "value_coef",
+    }
 
     # network_fn = (
     #     ppo_networks_vision.make_ppo_networks_vision
@@ -414,7 +433,20 @@ def train_or_load_checkpoint(env_name,
     # else:
     #     network_factory = network_fn
 
-    network_factory = functools.partial(networks.custom_network_factory, vision=vision, **getattr(ppo_params, "network_factory", {}))
+    if algorithm == "EPO":
+        if vision:
+            raise ValueError("EPO currently supports non-vision MJX training only")
+        train_backend = epo
+        network_factory = getattr(ppo_params, "network_factory", {})
+    else:
+        for key in epo_only_params:
+            training_params.pop(key, None)
+        train_backend = ppo
+        network_factory = functools.partial(
+            networks.custom_network_factory,
+            vision=vision,
+            **getattr(ppo_params, "network_factory", {}),
+        )
 
     if domain_randomization:
         training_params["randomization_fn"] = registry.get_domain_randomizer(
@@ -451,7 +483,7 @@ def train_or_load_checkpoint(env_name,
         del training_params["load_checkpoint_path"]
 
     train_fn = functools.partial(
-        ppo.train,
+        train_backend.train,
         **training_params,
         network_factory=network_factory,
         # policy_params_fn=policy_params_fn,

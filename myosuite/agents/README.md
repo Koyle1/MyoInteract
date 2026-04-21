@@ -113,6 +113,13 @@ The default Hydra config lives in `config/hydra_myo_epo_config.yaml`. A typical 
 python hydra_sb3_launcher.py --config-path config --config-name hydra_myo_epo_config.yaml env=myoElbowPose1D6MRandom-v0
 ```
 
+For the MJX-based MyoUser training stack, EPO is also available as a first-class
+algorithm switch through the shared Hydra config:
+
+```bash
+python -m myosuite.envs.myo.myouser.train_jax_rl rl.algorithm=EPO
+```
+
 </details>
 
 ## [SAR-RL](https://sites.google.com/view/sar-rl/)

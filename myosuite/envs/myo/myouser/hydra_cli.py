@@ -83,6 +83,7 @@ class VisionNetworkConfig(NetworkConfig):
 
 @dataclass
 class RLConfig:
+    algorithm: str = "PPO"
     num_timesteps: int = 15_000_000
     log_training_metrics: bool = True
     training_metrics_steps: int = 100000
@@ -98,13 +99,25 @@ class RLConfig:
     num_updates_per_batch: int = 8
     num_resets_per_eval: int = 1
     discounting: float = 0.97
+    gae_lambda: float = 0.95
     learning_rate: float = 3e-4
     entropy_cost: float = 0.001
     num_envs: int = 1024
     batch_size: int = 128
     max_grad_norm: float = 1.0
+    value_coef: float = 0.5
     network_factory: NetworkConfig = field(default_factory=lambda: NetworkConfig())
     load_checkpoint_path: Union[str, None] = None
+    latent_dim: int = 32
+    latent_hidden_size: int = 128
+    pool_size: int = 64
+    latent_scale: float = 1.0
+    elite_fraction: float = 0.25
+    mutation_std: float = 0.15
+    mutation_clip: float = 3.0
+    crossover_rate: float = 0.5
+    fitness_ema: float = 0.5
+    evolution_warmup_updates: int = 1
 
 class VisionModes(str, Enum):
     rgbd = 'rgbd'
