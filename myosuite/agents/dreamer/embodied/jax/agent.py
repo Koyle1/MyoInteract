@@ -14,6 +14,7 @@ import ninjax as nj
 import numpy as np
 P = jax.sharding.PartitionSpec
 
+from ... import epo
 from . import internal
 from . import transform
 
@@ -57,6 +58,8 @@ class Agent(embodied.Agent):
     self.config = config
     self.jaxcfg = jaxcfg
     self.logdir = elements.Path(config.logdir)
+    self.epo = None
+    self.epo_metrics = {}
 
     ext_space = self.model.ext_space  # Extra inputs to train and report.
     elements.print('Observations', color='cyan')
@@ -163,6 +166,16 @@ class Agent(embodied.Agent):
     self.pending_outs = None
     self.pending_mets = None
     self.pending_sync = None
+    if self.epo_enabled:
+      self.epo = epo.EvolutionaryLatentPool(
+          latent_dim=self.config.epo.latent_dim,
+          population_size=self.config.epo.population_size,
+          elite_fraction=self.config.epo.elite_fraction,
+          init_std=self.config.epo.init_std,
+          mutation_std=self.config.epo.mutation_std,
+          seed=self.config.seed,
+      )
+      self.epo_metrics = self.epo.metrics()
 
     if self.jaxcfg.enable_policy:
       policy_params = {
@@ -192,6 +205,67 @@ class Agent(embodied.Agent):
         print('Report cost analysis:')
         print(self._format_jit_stats(self._report))
       elements.print('Done compiling!', color='yellow')
+
+  @property
+  def epo_enabled(self):
+    return bool(getattr(self.config.epo, 'enabled', False))
+
+  def _gather_local(self, shards):
+    return np.concatenate([np.asarray(shard) for shard in shards], axis=0)
+
+  def _split_like(self, value, template):
+    value = np.asarray(value)
+    shards = []
+    start = 0
+    for shard in template:
+      stop = start + shard.shape[0]
+      shards.append(value[start:stop].astype(shard.dtype, copy=False))
+      start = stop
+    return shards
+
+  def _epo_prepare_policy_carry(self, carry, obs, mode):
+    latents = self._gather_local(carry[4])
+    indices = self._gather_local(carry[5]).astype(np.int32, copy=False)
+    returns = self._gather_local(carry[6]).astype(np.float32, copy=False)
+    lengths = self._gather_local(carry[7]).astype(np.int32, copy=False)
+
+    is_first = np.asarray(obs['is_first'], bool)
+    is_last = np.asarray(obs['is_last'], bool)
+    reward = np.asarray(obs['reward'], np.float32)
+
+    step_mask = ~is_first
+    returns = np.where(step_mask, returns + reward, 0.0).astype(np.float32)
+    lengths = np.where(step_mask, lengths + 1, 0).astype(np.int32)
+
+    if mode == 'train' and is_last.any():
+      self.epo.complete(indices[is_last], returns[is_last], lengths[is_last])
+
+    reset_mask = is_last.copy()
+    exploit = (mode != 'train')
+    if exploit:
+      reset_mask |= is_first
+    else:
+      reset_mask |= (is_first & (indices < 0))
+    if reset_mask.any():
+      new_indices, new_latents = self.epo.assign(
+          int(reset_mask.sum()), exploit=exploit)
+      indices = indices.copy()
+      latents = latents.copy()
+      indices[reset_mask] = new_indices
+      latents[reset_mask] = new_latents
+      returns = returns.copy()
+      lengths = lengths.copy()
+      returns[reset_mask] = 0.0
+      lengths[reset_mask] = 0
+
+    self.epo_metrics = self.epo.metrics()
+    return (
+        *carry[:4],
+        self._split_like(latents, carry[4]),
+        self._split_like(indices, carry[5]),
+        self._split_like(returns, carry[6]),
+        self._split_like(lengths, carry[7]),
+    )
 
   def init_policy(self, batch_size):
     if not self.jaxcfg.enable_policy:
@@ -225,6 +299,8 @@ class Agent(embodied.Agent):
         sorted(obs.keys()), sorted(self.obs_space.keys()))
     for key, space in self.obs_space.items():
       assert np.isfinite(obs[key]).all(), (obs[key], key, space)
+    if self.epo_enabled:
+      carry = self._epo_prepare_policy_carry(carry, obs, mode)
 
     with self.policy_lock:
       obs = internal.device_put(obs, self.policy_sharded)
@@ -292,6 +368,8 @@ class Agent(embodied.Agent):
     if self.pending_mets:
       return_mets = self._take_outs(self.pending_mets)
     self.pending_mets = internal.fetch_async(mets)
+    if self.epo_enabled:
+      return_mets.update(self.epo_metrics)
 
     if self.jaxcfg.profiler:
       outdir, copyto = self.logdir, None
@@ -320,6 +398,8 @@ class Agent(embodied.Agent):
     with self.train_lock:
       carry, mets = self._report(self.params, seed, carry, data)
       mets = self._take_outs(internal.fetch_async(mets))
+    if self.epo_enabled:
+      mets.update(self.epo_metrics)
     mets['params/summary'] = self._summary()
     return carry, mets
 
@@ -350,6 +430,8 @@ class Agent(embodied.Agent):
         'actions': int(self.n_actions),
     }
     data = {'params': params, 'counters': counters}
+    if self.epo_enabled:
+      data['epo'] = self.epo.save()
     return data
 
   @elements.timer.section('jaxagent_load')
@@ -369,6 +451,9 @@ class Agent(embodied.Agent):
         self.n_batches.value = int(data['counters']['updates'])
       with self.n_actions.lock:
         self.n_actions.value = int(data['counters']['actions'])
+      if self.epo_enabled and 'epo' in data:
+        self.epo.load(data['epo'])
+        self.epo_metrics = self.epo.metrics()
 
       if regex:
         params = {k: v for k, v in params.items() if re.match(regex, k)}

@@ -208,6 +208,7 @@ def train_loop_dreamer(job_data) -> None:
     _append_nested_flags(args, "agent.opt", _as_plain_dict(job_data, "dreamer_opt"))
     _append_nested_flags(args, "agent.dyn", _as_plain_dict(job_data, "dreamer_dyn"))
     _append_nested_flags(args, "agent.loss_scales", _as_plain_dict(job_data, "loss_scales"))
+    _append_nested_flags(args, "agent.epo", _as_plain_dict(job_data, "dreamer_epo"))
     _append_nested_flags(args, "run", _as_plain_dict(job_data, "dreamer_run"))
     _append_nested_flags(args, "jax", _as_plain_dict(job_data, "dreamer_jax"))
     args = [str(arg) for arg in args if arg is not None]

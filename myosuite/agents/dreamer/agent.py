@@ -83,6 +83,24 @@ class Agent(embodied.jax.Agent):
     self.scales = scales
 
   @property
+  def epo_enabled(self):
+    return bool(self.config.epo.enabled)
+
+  @property
+  def epo_latent_dim(self):
+    return int(self.config.epo.latent_dim)
+
+  def _policy_features(self, feat, latent=None):
+    feat = self.feat2tensor(feat)
+    if not self.epo_enabled:
+      return feat
+    assert latent is not None
+    latent = nn.cast(latent)
+    assert feat.shape[:-1] == latent.shape[:-1], (
+        feat.shape, latent.shape)
+    return jnp.concatenate([feat, latent], -1)
+
+  @property
   def policy_keys(self):
     return '^(enc|dyn|dec|pol)/'
 
@@ -91,6 +109,9 @@ class Agent(embodied.jax.Agent):
     spaces = {}
     spaces['consec'] = elements.Space(np.int32)
     spaces['stepid'] = elements.Space(np.uint8, 20)
+    if self.epo_enabled:
+      spaces['epo_latent'] = elements.Space(
+          np.float32, (self.epo_latent_dim,))
     if self.config.replay_context:
       spaces.update(elements.tree.flatdict(dict(
           enc=self.enc.entry_space,
@@ -100,11 +121,20 @@ class Agent(embodied.jax.Agent):
 
   def init_policy(self, batch_size):
     zeros = lambda x: jnp.zeros((batch_size, *x.shape), x.dtype)
-    return (
+    carry = (
         self.enc.initial(batch_size),
         self.dyn.initial(batch_size),
         self.dec.initial(batch_size),
         jax.tree.map(zeros, self.act_space))
+    if not self.epo_enabled:
+      return carry
+    return (
+        *carry,
+        jnp.zeros((batch_size, self.epo_latent_dim), f32),
+        -jnp.ones((batch_size,), i32),
+        jnp.zeros((batch_size,), f32),
+        jnp.zeros((batch_size,), i32),
+    )
 
   def init_train(self, batch_size):
     return self.init_policy(batch_size)
@@ -113,7 +143,10 @@ class Agent(embodied.jax.Agent):
     return self.init_policy(batch_size)
 
   def policy(self, carry, obs, mode='train'):
-    (enc_carry, dyn_carry, dec_carry, prevact) = carry
+    if self.epo_enabled:
+      enc_carry, dyn_carry, dec_carry, prevact, latent, latent_index, epret, eplen = carry
+    else:
+      enc_carry, dyn_carry, dec_carry, prevact = carry
     kw = dict(training=False, single=True)
     reset = obs['is_first']
     enc_carry, enc_entry, tokens = self.enc(enc_carry, obs, reset, **kw)
@@ -122,22 +155,32 @@ class Agent(embodied.jax.Agent):
     dec_entry = {}
     if dec_carry:
       dec_carry, dec_entry, recons = self.dec(dec_carry, feat, reset, **kw)
-    policy = self.pol(self.feat2tensor(feat), bdims=1)
+    policy = self.pol(
+        self._policy_features(
+            feat, latent if self.epo_enabled else None),
+        bdims=1)
     act = sample(policy)
     out = {}
     out['finite'] = elements.tree.flatdict(jax.tree.map(
         lambda x: jnp.isfinite(x).all(range(1, x.ndim)),
         dict(obs=obs, carry=carry, tokens=tokens, feat=feat, act=act)))
-    carry = (enc_carry, dyn_carry, dec_carry, act)
+    if self.epo_enabled:
+      out['epo_latent'] = latent
+      out['log/epo_latent_norm'] = jnp.linalg.norm(latent, axis=-1)
+      carry = (
+          enc_carry, dyn_carry, dec_carry, act,
+          latent, latent_index, epret, eplen)
+    else:
+      carry = (enc_carry, dyn_carry, dec_carry, act)
     if self.config.replay_context:
       out.update(elements.tree.flatdict(dict(
           enc=enc_entry, dyn=dyn_entry, dec=dec_entry)))
     return carry, act, out
 
   def train(self, carry, data):
-    carry, obs, prevact, stepid = self._apply_replay_context(carry, data)
+    carry, obs, prevact, stepid, latent = self._apply_replay_context(carry, data)
     metrics, (carry, entries, outs, mets) = self.opt(
-        self.loss, carry, obs, prevact, training=True, has_aux=True)
+        self.loss, carry, obs, prevact, latent, training=True, has_aux=True)
     metrics.update(mets)
     self.slowval.update()
     outs = {}
@@ -151,9 +194,18 @@ class Agent(embodied.jax.Agent):
     # if self.config.replay.fracs.priority > 0:
     #   outs['replay']['priority'] = losses['model']
     carry = (*carry, {k: data[k][:, -1] for k in self.act_space})
+    if self.epo_enabled:
+      B = data['stepid'].shape[0]
+      carry = (
+          *carry,
+          data['epo_latent'][:, -1],
+          jnp.zeros((B,), i32),
+          jnp.zeros((B,), f32),
+          jnp.zeros((B,), i32),
+      )
     return carry, outs, metrics
 
-  def loss(self, carry, obs, prevact, training):
+  def loss(self, carry, obs, prevact, latent, training):
     enc_carry, dyn_carry, dec_carry = carry
     reset = obs['is_first']
     B, T = reset.shape
@@ -189,7 +241,11 @@ class Agent(embodied.jax.Agent):
     K = min(self.config.imag_last or T, T)
     H = self.config.imag_length
     starts = self.dyn.starts(dyn_entries, dyn_carry, K)
-    policyfn = lambda feat: sample(self.pol(self.feat2tensor(feat), 1))
+    start_latent = None
+    if self.epo_enabled:
+      start_latent = latent[:, -K:].reshape((B * K, self.epo_latent_dim))
+    policyfn = lambda feat: sample(self.pol(
+        self._policy_features(feat, start_latent), 1))
     _, imgfeat, imgprevact = self.dyn.imagine(starts, policyfn, H, training)
     first = jax.tree.map(
         lambda x: x[:, -K:].reshape((B * K, 1, *x.shape[2:])), repfeat)
@@ -200,11 +256,18 @@ class Agent(embodied.jax.Agent):
     assert all(x.shape[:2] == (B * K, H + 1) for x in jax.tree.leaves(imgfeat))
     assert all(x.shape[:2] == (B * K, H + 1) for x in jax.tree.leaves(imgact))
     inp = self.feat2tensor(imgfeat)
+    polinp = inp
+    if self.epo_enabled:
+      imgshape = jax.tree.leaves(imgfeat)[0].shape[:2]
+      imglatent = jnp.broadcast_to(
+          start_latent[:, None, :],
+          (*imgshape, self.epo_latent_dim))
+      polinp = jnp.concatenate([inp, nn.cast(imglatent)], -1)
     los, imgloss_out, mets = imag_loss(
         imgact,
         self.rew(inp, 2).pred(),
         self.con(inp, 2).prob(1),
-        self.pol(inp, 2),
+        self.pol(polinp, 2),
         self.val(inp, 2),
         self.slowval(inp, 2),
         self.retnorm, self.valnorm, self.advnorm,
@@ -248,7 +311,7 @@ class Agent(embodied.jax.Agent):
     if not self.config.report:
       return carry, {}
 
-    carry, obs, prevact, _ = self._apply_replay_context(carry, data)
+    carry, obs, prevact, _, latent = self._apply_replay_context(carry, data)
     (enc_carry, dyn_carry, dec_carry) = carry
     B, T = obs['is_first'].shape
     RB = min(6, B)
@@ -256,7 +319,7 @@ class Agent(embodied.jax.Agent):
 
     # Train metrics
     _, (new_carry, entries, outs, mets) = self.loss(
-        carry, obs, prevact, training=False)
+        carry, obs, prevact, latent, training=False)
     mets.update(mets)
 
     # Grad norms
@@ -264,7 +327,8 @@ class Agent(embodied.jax.Agent):
       for key in self.scales:
         try:
           lossfn = lambda data, carry: self.loss(
-              carry, obs, prevact, training=False)[1][2]['losses'][key].mean()
+              carry, obs, prevact, latent, training=False
+          )[1][2]['losses'][key].mean()
           grad = nj.grad(lossfn, self.modules)(data, carry)[-1]
           metrics[f'gradnorm/{key}'] = optax.global_norm(grad)
         except KeyError:
@@ -307,17 +371,29 @@ class Agent(embodied.jax.Agent):
       metrics[f'openloop/{key}'] = grid
 
     carry = (*new_carry, {k: data[k][:, -1] for k in self.act_space})
+    if self.epo_enabled:
+      carry = (
+          *carry,
+          data['epo_latent'][:, -1],
+          jnp.zeros((B,), i32),
+          jnp.zeros((B,), f32),
+          jnp.zeros((B,), i32),
+      )
     return carry, metrics
 
   def _apply_replay_context(self, carry, data):
-    (enc_carry, dyn_carry, dec_carry, prevact) = carry
+    if self.epo_enabled:
+      enc_carry, dyn_carry, dec_carry, prevact, latent_carry, latent_index, epret, eplen = carry
+    else:
+      enc_carry, dyn_carry, dec_carry, prevact = carry
     carry = (enc_carry, dyn_carry, dec_carry)
     stepid = data['stepid']
     obs = {k: data[k] for k in self.obs_space}
     prepend = lambda x, y: jnp.concatenate([x[:, None], y[:, :-1]], 1)
     prevact = {k: prepend(prevact[k], data[k]) for k in self.act_space}
+    latent = data['epo_latent'] if self.epo_enabled else None
     if not self.config.replay_context:
-      return carry, obs, prevact, stepid
+      return carry, obs, prevact, stepid, latent
 
     K = self.config.replay_context
     nested = elements.tree.nestdict(data)
@@ -337,7 +413,9 @@ class Agent(embodied.jax.Agent):
         lambda normal, replay: nn.where(first_chunk, replay, normal),
         (carry, rhs(obs), rhs(prevact), rhs(stepid)),
         (rep_carry, rep_obs, rep_prevact, rep_stepid))
-    return carry, obs, prevact, stepid
+    if self.epo_enabled:
+      latent = rhs(latent)
+    return carry, obs, prevact, stepid, latent
 
   def _make_opt(
       self,

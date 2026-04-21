@@ -31,6 +31,7 @@ os.environ.setdefault(
 )
 
 from datetime import datetime
+import shutil
 import warnings
 import pickle
 import h5py
@@ -86,6 +87,22 @@ warnings.filterwarnings("ignore", category=RuntimeWarning, module="jax")
 warnings.filterwarnings("ignore", category=DeprecationWarning, module="jax")
 # Suppress UserWarnings from absl (used by JAX and TensorFlow)
 warnings.filterwarnings("ignore", category=UserWarning, module="absl")
+
+
+
+def _maybe_write_video(path, frames, fps):
+  if shutil.which("ffmpeg") is None:
+    print(f"Skipping video export for '{path.name}': ffmpeg is not available.")
+    return False
+  try:
+    media.write_video(path, frames, fps=fps)
+  except (FileNotFoundError, RuntimeError) as exc:
+    if "ffmpeg" in str(exc).lower():
+      print(f"Skipping video export for '{path.name}': {exc}")
+      return False
+    raise
+  print(f"Rollout video saved as '{path.name}'.")
+  return True
 
 
 
@@ -217,9 +234,9 @@ def train(cfg: Config):
       videos = [frame.squeeze() for v in videos for frame in v]
     else:
       videos = [frame for v in videos for frame in v]
-    media.write_video(logdir / "madrona_rollout.mp4", videos, fps=fps)
-    print("Rollout video saved as 'madrona_rollout.mp4'.")
-    if config.wandb.enabled and not config.run.play_only:
+    madrona_path = logdir / "madrona_rollout.mp4"
+    saved = _maybe_write_video(madrona_path, videos, fps=fps)
+    if saved and config.wandb.enabled and not config.run.play_only:
       wandb.log({'final_policy/madrona_view': wandb.Video(str(logdir / "madrona_rollout.mp4"), format="mp4")})  #, fps=fps)})
 
   print(f"Return: {jp.array([r.reward for rollout in rollouts for r in rollout]).sum()}")
@@ -249,9 +266,9 @@ def train(cfg: Config):
       render_every=render_every,
       #scene_option=scene_option,
   )
-  media.write_video(logdir / "rollout.mp4", frames, fps=fps)
-  print("Rollout video saved as 'rollout.mp4'.")
-  if config.wandb.enabled and not config.run.play_only:
+  rollout_path = logdir / "rollout.mp4"
+  saved = _maybe_write_video(rollout_path, frames, fps=fps)
+  if saved and config.wandb.enabled and not config.run.play_only:
     wandb.log({'final_policy/front_view': wandb.Video(str(logdir / "rollout.mp4"), format="mp4")})  #, fps=fps)})
 
   # render side view
@@ -260,9 +277,9 @@ def train(cfg: Config):
       notebook_context=False,
       #scene_option=scene_option
   )
-  media.write_video(logdir / "rollout_1.mp4", frames, fps=fps)
-  print("Rollout video saved as 'rollout_1.mp4'.")
-  if config.wandb.enabled and not config.run.play_only:
+  side_path = logdir / "rollout_1.mp4"
+  saved = _maybe_write_video(side_path, frames, fps=fps)
+  if saved and config.wandb.enabled and not config.run.play_only:
     wandb.log({'final_policy/side_view': wandb.Video(str(logdir / "rollout_1.mp4"), format="mp4")})  #, fps=fps)})
   
 

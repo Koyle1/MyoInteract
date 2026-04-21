@@ -25,6 +25,7 @@ train_ratio       :   32
 replay_size       :   100000
 dreamer_run       :   {}
 dreamer_jax       :   {}
+dreamer_epo       :   {enabled: false}
 
 # Dreamer optimizer settings
 dreamer_opt:
