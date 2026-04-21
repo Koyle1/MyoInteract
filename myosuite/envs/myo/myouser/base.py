@@ -5,6 +5,7 @@ Authors  :: Florian Fischer (fjf33@cam.ac.uk); Vikash Kumar (vikashplus@gmail.co
 
 from typing import Any, Callable, Dict, List, Sequence, Optional, Union
 import abc
+from pathlib import Path
 import tqdm
 
 # from myosuite.utils import gym
@@ -92,6 +93,34 @@ ALLOWED_MUSCLE_CONDITIONS = ("sarcopenia", "fatigue", "reafferentation", None)
 ALLOWED_RESET_TYPES = ("zero", "epsilon_uniform", "range_uniform", None)
 
 
+def _resolve_model_path(model_path: str) -> str:
+    """Resolve model XML paths independent of the current working directory."""
+    candidate = Path(model_path).expanduser()
+    if candidate.is_absolute():
+        if candidate.exists():
+            return str(candidate)
+        raise FileNotFoundError(f"Model path does not exist: {candidate}")
+
+    package_root = Path(__file__).resolve().parents[3]
+    repo_root = package_root.parent
+    candidates = [
+        Path.cwd() / candidate,
+        repo_root / candidate,
+        package_root / candidate,
+    ]
+    if candidate.parts and candidate.parts[0] == "myosuite":
+        candidates.append(package_root / Path(*candidate.parts[1:]))
+
+    for resolved in candidates:
+        if resolved.exists():
+            return str(resolved.resolve())
+
+    attempted = ", ".join(str(path) for path in candidates)
+    raise FileNotFoundError(
+        f"Could not resolve model path {model_path!r}. Attempted: {attempted}"
+    )
+
+
 class MyoUserBase(mjx_env.MjxEnv):
     @property
     def mjx_model(self) -> mjx.Model:
@@ -107,7 +136,7 @@ class MyoUserBase(mjx_env.MjxEnv):
 
     @property
     def xml_path(self) -> str:
-        return self._config.model_path
+        return self._resolved_model_path
     
     def __init__(
         self,
@@ -116,6 +145,7 @@ class MyoUserBase(mjx_env.MjxEnv):
     ):
         super().__init__(deepcopy(config), config_overrides)
         self.eval_mode = self._config.eval_mode
+        self._resolved_model_path = _resolve_model_path(self._config.model_path)
 
         self._prepare_mjx_model()
         self._prepare_env()
