@@ -16,6 +16,7 @@
 
 import os
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+os.environ.setdefault("JAX_DEFAULT_MATMUL_PRECISION", "float32")
 
 from datetime import datetime
 import warnings
