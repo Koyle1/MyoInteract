@@ -380,32 +380,33 @@ def train(
       )
 
     current_steps = int(jax.device_get(train_state.env_steps))
-    metrics = {
-        "rollout/mean_reward": float(jax.device_get(jnp.mean(batch.rewards))),
-        "rollout/mean_segment_return": float(
-            jax.device_get(jnp.mean(batch.segment_returns))
-        ),
-        "rollout/done_fraction": float(jax.device_get(jnp.mean(batch.dones))),
-        "ppo/policy_loss": float(jax.device_get(batch_metrics["policy_loss"])),
-        "ppo/value_loss": float(jax.device_get(batch_metrics["value_loss"])),
-        "ppo/entropy": float(jax.device_get(batch_metrics["entropy"])),
-        "ppo/grad_norm": float(jax.device_get(batch_metrics["grad_norm"])),
-        "evo/best_fitness": float(jax.device_get(jnp.max(latent_pool.fitness))),
-        "evo/mean_fitness": float(jax.device_get(jnp.mean(latent_pool.fitness))),
-        "evo/best_latent_norm": float(
-            jax.device_get(
-                jnp.linalg.norm(latent_pool.latents[jnp.argmax(latent_pool.fitness)])
-            )
-        ),
-        "time/elapsed_sec": float(time.time() - training_start),
-        **_metrics_to_python(rollout_metrics),
-    }
-
-    if current_steps - last_log_steps >= log_interval_steps or current_steps >= num_timesteps:
+    should_log = (
+        current_steps - last_log_steps >= log_interval_steps
+        or current_steps >= num_timesteps
+    )
+    if should_log:
+      metrics = {
+          "rollout/mean_reward": float(jax.device_get(jnp.mean(batch.rewards))),
+          "rollout/mean_segment_return": float(
+              jax.device_get(jnp.mean(batch.segment_returns))
+          ),
+          "rollout/done_fraction": float(jax.device_get(jnp.mean(batch.dones))),
+          "ppo/policy_loss": float(jax.device_get(batch_metrics["policy_loss"])),
+          "ppo/value_loss": float(jax.device_get(batch_metrics["value_loss"])),
+          "ppo/entropy": float(jax.device_get(batch_metrics["entropy"])),
+          "ppo/grad_norm": float(jax.device_get(batch_metrics["grad_norm"])),
+          "evo/best_fitness": float(jax.device_get(jnp.max(latent_pool.fitness))),
+          "evo/mean_fitness": float(jax.device_get(jnp.mean(latent_pool.fitness))),
+          "evo/best_latent_norm": float(
+              jax.device_get(
+                  jnp.linalg.norm(latent_pool.latents[jnp.argmax(latent_pool.fitness)])
+              )
+          ),
+          "time/elapsed_sec": float(time.time() - training_start),
+          **_metrics_to_python(rollout_metrics),
+      }
       progress_fn(current_steps, metrics)
       last_log_steps = current_steps
-    elif log_training_metrics:
-      progress_fn(current_steps, metrics)
 
     if (
         checkpoint_interval is not None
@@ -894,6 +895,8 @@ def _summarize_rollout_metrics(
       "episode/sum_reward": jnp.sum(rollout["episode_sum_reward"] * done_mask)
       / done_count,
       "episode/length": jnp.sum(rollout["episode_length"] * done_mask) / done_count,
+      # Live partial-episode progress for runs where no rollout chunk reaches done yet.
+      "episode/current_length_mean": jnp.mean(rollout["episode_length"][-1]),
   }
   for metric_key in metric_keys:
     metrics[f"episode/{metric_key}"] = (

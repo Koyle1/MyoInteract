@@ -17,6 +17,18 @@
 import os
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 os.environ.setdefault("JAX_DEFAULT_MATMUL_PRECISION", "float32")
+_xdg_cache_home = os.environ.get(
+    "XDG_CACHE_HOME",
+    os.path.join(os.path.expanduser("~"), ".cache"),
+)
+os.environ.setdefault(
+    "JAX_COMPILATION_CACHE_DIR",
+    os.path.join(_xdg_cache_home, "jax"),
+)
+os.environ.setdefault(
+    "JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES",
+    "xla_gpu_per_fusion_autotune_cache_dir",
+)
 
 from datetime import datetime
 import warnings
