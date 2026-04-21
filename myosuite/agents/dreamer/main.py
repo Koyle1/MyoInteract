@@ -241,13 +241,18 @@ def make_env(config, index, **overrides):
     import myosuite  # noqa: F401  # Registers MyoSuite environments.
     from myosuite.utils import gym as myogym
     from embodied.envs import from_gym
+    from embodied.envs.myo_universal import MyoUniversal
   if suite == 'memmaze':
     from embodied.envs import from_gym
     import memory_maze  # noqa
   ctor = {
       'dummy': 'embodied.envs.dummy:Dummy',
       'gym': 'embodied.envs.from_gym:FromGym',
-      'myo': lambda task, **kw: from_gym.FromGym(myogym.make(task), **kw),
+      'myo': lambda task, **kw: (
+          MyoUniversal(task, **kw)
+          if task == 'universal' or task.startswith('universal_')
+          else from_gym.FromGym(myogym.make(task), **kw)
+      ),
       'dm': 'embodied.envs.from_dmenv:FromDM',
       'crafter': 'embodied.envs.crafter:Crafter',
       'dmc': 'embodied.envs.dmc:DMC',
@@ -269,6 +274,8 @@ def make_env(config, index, **overrides):
     ctor = getattr(module, cls)
   kwargs = config.env.get(suite, {})
   kwargs.update(overrides)
+  if suite == 'myo' and (task == 'universal' or task.startswith('universal_')):
+    kwargs.setdefault('seed', hash((config.seed, index)) % (2 ** 32 - 1))
   if kwargs.pop('use_seed', False):
     kwargs['seed'] = hash((config.seed, index)) % (2 ** 32 - 1)
   if kwargs.pop('use_logdir', False):
