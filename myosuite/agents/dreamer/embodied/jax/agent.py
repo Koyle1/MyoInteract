@@ -14,7 +14,10 @@ import ninjax as nj
 import numpy as np
 P = jax.sharding.PartitionSpec
 
-from ... import epo
+try:
+  from dreamer import epo
+except ImportError:
+  import epo
 from . import internal
 from . import transform
 

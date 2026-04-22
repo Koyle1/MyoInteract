@@ -1,9 +1,11 @@
 import functools
+from dataclasses import asdict
 
 import elements
 import embodied
 import jax
 import numpy as np
+from ml_collections import config_dict
 
 from myosuite.envs.myo.myouser.myouser_universal import (
     LIST_CONFIGS,
@@ -24,7 +26,7 @@ class MyoUniversal(embodied.Env):
     preset = self._parse_task(task)
     config = UniversalEnvConfig()
     config.task_config.targets = self._preset_ctor(preset)()
-    self._env = MyoUserUniversal(config)
+    self._env = MyoUserUniversal(config_dict.create(**asdict(config)))
     self._episode_length = int(
         self._env._config.task_config.max_duration / self._env._config.ctrl_dt
     )
