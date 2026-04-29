@@ -7,6 +7,7 @@ import jax
 import numpy as np
 from ml_collections import config_dict
 
+from myosuite.envs.myo.myouser.base import get_default_config
 from myosuite.envs.myo.myouser.myouser_universal import (
     LIST_CONFIGS,
     UniversalEnvConfig,
@@ -24,9 +25,8 @@ class MyoUniversal(embodied.Env):
     self._step = 0
 
     preset = self._parse_task(task)
-    config = UniversalEnvConfig()
-    config.task_config.targets = self._preset_ctor(preset)()
-    self._env = MyoUserUniversal(config_dict.create(**asdict(config)))
+    config = self._make_config(preset)
+    self._env = MyoUserUniversal(config)
     self._episode_length = int(
         self._env._config.task_config.max_duration / self._env._config.ctrl_dt
     )
@@ -119,3 +119,16 @@ class MyoUniversal(embodied.Env):
       available = ', '.join(sorted(presets))
       raise KeyError(f'Unknown universal preset {name!r}. Available: {available}')
     return presets[name]
+
+  @classmethod
+  def _make_config(cls, preset):
+    config = UniversalEnvConfig()
+    config.task_config.targets = cls._preset_ctor(preset)()
+    full = get_default_config()
+    full.model_path = config.model_path
+    full.ctrl_dt = config.ctrl_dt
+    full.sim_dt = config.sim_dt
+    full.eval_mode = config.eval_mode
+    full.muscle_config = config_dict.create(**asdict(config.muscle_config))
+    full.task_config = config_dict.create(**asdict(config.task_config))
+    return full
