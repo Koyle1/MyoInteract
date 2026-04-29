@@ -42,9 +42,12 @@ class MyoUniversal(embodied.Env):
 
   @functools.cached_property
   def obs_space(self):
-    obs = np.asarray(jax.device_get(self._state.obs), dtype=np.float32)
+    spaces = {}
+    for key, value in self._flatten_obs(self._state.obs).items():
+      array = np.asarray(jax.device_get(value))
+      spaces[key] = elements.Space(array.dtype, array.shape)
     return {
-        self._obs_key: elements.Space(np.float32, obs.shape),
+        **spaces,
         'reward': elements.Space(np.float32),
         'is_first': elements.Space(bool),
         'is_last': elements.Space(bool),
@@ -91,9 +94,12 @@ class MyoUniversal(embodied.Env):
   def _obs(
       self, obs, reward, is_first=False, is_last=False, is_terminal=False
   ):
-    obs = np.asarray(jax.device_get(obs), dtype=np.float32)
+    obs = {
+        key: np.asarray(jax.device_get(value))
+        for key, value in self._flatten_obs(obs).items()
+    }
     return {
-        self._obs_key: obs,
+        **obs,
         'reward': np.float32(np.asarray(jax.device_get(reward), dtype=np.float32)),
         'is_first': bool(is_first),
         'is_last': bool(is_last),
@@ -103,6 +109,15 @@ class MyoUniversal(embodied.Env):
   def _next_rng(self):
     self._rng, reset_rng = jax.random.split(self._rng)
     return reset_rng
+
+  def _flatten_obs(self, obs, prefix=None):
+    if isinstance(obs, dict):
+      result = {}
+      for key, value in obs.items():
+        key = f'{prefix}/{key}' if prefix else key
+        result.update(self._flatten_obs(value, key))
+      return result
+    return {prefix or self._obs_key: obs}
 
   @staticmethod
   def _parse_task(task):
@@ -129,6 +144,8 @@ class MyoUniversal(embodied.Env):
     full.ctrl_dt = config.ctrl_dt
     full.sim_dt = config.sim_dt
     full.eval_mode = config.eval_mode
+    full.vision.enabled = False
+    full.vision.vision_mode = 'rgbd'
     full.muscle_config = config_dict.create(**asdict(config.muscle_config))
     full.task_config = config_dict.create(**asdict(config.task_config))
     return full
