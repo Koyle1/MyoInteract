@@ -12,6 +12,7 @@ from myosuite.envs.myo.myouser.myouser_universal import (
     LIST_CONFIGS,
     UniversalEnvConfig,
     MyoUserUniversal,
+    _musclemimic_model_path,
 )
 
 
@@ -24,8 +25,8 @@ class MyoUniversal(embodied.Env):
     self._done = True
     self._step = 0
 
-    preset = self._parse_task(task)
-    config = self._make_config(preset)
+    model_name, preset = self._parse_task(task)
+    config = self._make_config(model_name, preset)
     self._env = MyoUserUniversal(config)
     self._episode_length = int(
         self._env._config.task_config.max_duration / self._env._config.ctrl_dt
@@ -122,10 +123,14 @@ class MyoUniversal(embodied.Env):
   @staticmethod
   def _parse_task(task):
     if task == 'universal':
-      return 'default'
+      return 'myosuite', 'default'
     if task.startswith('universal_'):
-      return task[len('universal_'):]
-    return task
+      remainder = task[len('universal_'):]
+      if remainder.startswith('bimanual'):
+        model_name, _, preset = remainder.partition('_')
+        return model_name, preset or 'default'
+      return 'myosuite', remainder
+    return 'myosuite', task
 
   @staticmethod
   def _preset_ctor(name):
@@ -136,8 +141,12 @@ class MyoUniversal(embodied.Env):
     return presets[name]
 
   @classmethod
-  def _make_config(cls, preset):
+  def _make_config(cls, model_name, preset):
     config = UniversalEnvConfig()
+    if model_name == 'bimanual':
+      config.model_path = _musclemimic_model_path('bimanual')
+      config.task_config.reach_settings.ref_site = 'R.Shoulder_marker'
+      config.task_config.reach_settings.ee_site = 'IFtip'
     config.task_config.targets = cls._preset_ctor(preset)()
     full = get_default_config()
     full.model_path = config.model_path

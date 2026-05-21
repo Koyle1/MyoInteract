@@ -80,6 +80,22 @@ env.close()
 You can find our [tutorials](https://github.com/myohub/myosuite/tree/main/docs/source/tutorials#tutorials) on the general features and the **ICRA2023 Colab Tutorial** [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1KGqZgSYgKXF-vaYC33GR9llDsIW9Rp-q) **ICRA2024 Colab Tutorial** [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1JwxE7o6Z3bqCT4ewELacJ-Z1SV8xFhKK#scrollTo=QDppGIzHB9Zu)
 on how to load MyoSuite models/tasks, train them, and visualize their outcome. Also, you can find [baselines](https://github.com/myohub/myosuite/tree/main/myosuite/agents) to test some pre-trained policies.
 
+## MuscleMimic Integration
+
+MyoInteract also includes the MuscleMimic bimanual arm model for the universal task. The MuscleMimic repos (`external/musclemimic` and `external/musclemimic_models`) are kept untouched.
+
+Use the new preset with:
+
+```bash
+python -m myosuite.envs.myo.myouser.train_jax_ppo env=musclemimic_bimanual
+```
+
+For Dreamer, the matching task name is:
+
+```bash
+task=myo_universal_bimanual
+```
+
 
 
 ## License

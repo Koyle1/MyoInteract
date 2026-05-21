@@ -23,6 +23,7 @@ import mujoco
 from mujoco import mjx
 from mujoco_playground import State
 from omegaconf import MISSING
+from pathlib import Path
 
 from mujoco_playground._src import mjx_env  # Several helper functions are only visible under _src
 from myosuite.envs.myo.fatigue import CumulativeFatigue
@@ -30,9 +31,92 @@ from myosuite.envs.myo.myouser.base import MyoUserBase, BaseEnvConfig
 from dataclasses import dataclass, field, make_dataclass
 from typing import List, Dict, Union, Any, Type, Tuple
 
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[4]
+
+
+def _is_musclemimic_model_path(model_path: str) -> bool:
+    return "musclemimic_models" in Path(model_path).as_posix()
+
+
+def _musclemimic_model_path(model_name: str) -> str:
+    """Resolve a MuscleMimic MJCF path without modifying the MuscleMimic repo."""
+    local_model_root = (
+        _repo_root()
+        / "external"
+        / "musclemimic_models"
+        / "musclemimic_models"
+        / "model"
+    )
+    path_map = {
+        "bimanual": (local_model_root / "arm" / "myoarm_bimanual.xml", "bimanual"),
+        "myofullbody": (
+            local_model_root / "body" / "myofullbody.xml",
+            "myofullbody",
+        ),
+    }
+    if model_name not in path_map:
+        raise KeyError(
+            f"Unknown MuscleMimic model {model_name!r}. "
+            f"Available: {sorted(path_map)}"
+        )
+
+    local_path, package_name = path_map[model_name]
+    if local_path.exists():
+        return str(local_path)
+
+    try:
+        import musclemimic_models as mm
+    except ImportError as exc:
+        raise FileNotFoundError(
+            f"Could not resolve MuscleMimic model {model_name!r}. "
+            f"Tried {local_path} and the installed musclemimic_models package "
+            f"is not available."
+        ) from exc
+
+    return str(mm.get_xml_path(package_name))
+
+
+def _resolve_target_origin_site(model_path: str, ref_site: str) -> str:
+    if _is_musclemimic_model_path(model_path) and ref_site == "humphant":
+        return "R.Shoulder_marker"
+    return ref_site
+
+
+def _resolve_end_effector_site(model_path: str, ee_site: str) -> str:
+    if _is_musclemimic_model_path(model_path) and ee_site == "fingertip":
+        return "IFtip"
+    return ee_site
+
+
+def _add_musclemimic_viewer_cameras(spec: mujoco.MjSpec):
+    """MuscleMimic models do not ship with the MyoInteract viewer cameras."""
+    worldbody = spec.worldbody
+    worldbody.add_camera(
+        name="fixed-eye",
+        pos=[0.0, 0.0, 1.2],
+        quat=[0.583833, 0.399104, -0.399421, -0.583368],
+        fovy=120,
+    )
+    worldbody.add_camera(
+        name="side_camera",
+        pos=[0.25, -0.27, 1.0],
+        euler=[1.5708, 0.0, 0.0],
+        fovy=70,
+    )
+    worldbody.add_camera(
+        name="head_on_camera",
+        pos=[1.5, 0.0, 1.0],
+        euler=[1.5708, 1.5708, 0.0],
+        fovy=10,
+    )
+    return spec
+
 @dataclass
 class ReachSettings:
     ref_site: str = "humphant"
+    ee_site: str = "fingertip"
     target_origin_rel: List[float] = field(default_factory=lambda: [0., 0., 0.])
 
 
@@ -192,6 +276,12 @@ class UniversalEnvConfig(BaseEnvConfig):
     env_name: str = "MyoUserUniversal"
     model_path: str = "myosuite/envs/myo/assets/arm/mobl_arms_index_universal_myouser.xml"
     task_config: UniversalTaskConfig = field(default_factory=lambda: UniversalTaskConfig())
+
+
+@dataclass
+class MuscleMimicBimanualEnvConfig(UniversalEnvConfig):
+    env_name: str = "MyoUserMuscleMimicBimanual"
+    model_path: str = field(default_factory=lambda: _musclemimic_model_path("bimanual"))
 
 class TargetClass:
     def update_task_visuals_all_shown(self, mj_model: mujoco.MjModel, state: State, phase: int):
@@ -459,7 +549,29 @@ class ButtonTargetClass(TargetClass):
 
 
 class MyoUserUniversal(MyoUserBase): 
-    
+    def _uses_musclemimic_model(self) -> bool:
+        return _is_musclemimic_model_path(self._config.model_path)
+
+    def _task_reach_settings(self):
+        task_config = getattr(self._config, "task_config", None)
+        if task_config is None:
+            return None
+        return getattr(task_config, "reach_settings", None)
+
+    def _get_ref_site(self) -> str:
+        reach_settings = self._task_reach_settings()
+        ref_site = getattr(reach_settings, "ref_site", "humphant")
+        return _resolve_target_origin_site(
+            self._config.model_path, ref_site
+        )
+
+    def _get_ee_site(self) -> str:
+        reach_settings = self._task_reach_settings()
+        ee_site = getattr(reach_settings, "ee_site", "fingertip")
+        return _resolve_end_effector_site(
+            self._config.model_path, ee_site
+        )
+
     def add_task_relevant_geoms(self, spec: mujoco.MjSpec):
         targets = self._config.task_config.targets
         num_targets = targets.num_targets
@@ -469,7 +581,10 @@ class MyoUserUniversal(MyoUserBase):
         model = spec.compile()
         data = mujoco.MjData(model)
         mujoco.mj_forward(model, data)
-        target_coordinates_origin = data.site_xpos[mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, self._config.task_config.reach_settings.ref_site)]
+        ref_site = self._get_ref_site()
+        target_coordinates_origin = data.site_xpos[
+            mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, ref_site)
+        ]
         rng = jax.random.PRNGKey(self._config.task_config.target_init_seed)
         for i, target in enumerate(targets):
             rng, rng_init = jax.random.split(rng, 2)
@@ -507,6 +622,8 @@ class MyoUserUniversal(MyoUserBase):
 
     def preprocess_spec(self, spec: mujoco.MjSpec):
         spec = self.add_task_relevant_geoms(spec)
+        if self._uses_musclemimic_model():
+            spec = _add_musclemimic_viewer_cameras(spec)
         return super().preprocess_spec(spec)
 
     def model_render(self, camera: str):
@@ -535,7 +652,8 @@ class MyoUserUniversal(MyoUserBase):
         else:
             print(f"Vision, so not adding {self.omni_keys} to obs_keys")
         print(f"Obs keys: {self.obs_keys}")
-        self.ee_pos_id = self.mj_model.site('fingertip').id
+        ee_site = self._get_ee_site()
+        self.ee_pos_id = self.mj_model.site(ee_site).id
         self.non_accumulation_metrics = ['distance_to_target', ] + [f'target_{i}_completed' for i in range(len(self.target_objs)-1)]
         self.accumulation_metrics = ['target_final_completed', 'jac_effort_reward', 'phase_bonus_reward', 'done_reward', 'neural_effort_reward', 'distance_reward']
 
@@ -543,7 +661,13 @@ class MyoUserUniversal(MyoUserBase):
     def _prepare_after_init(self, data):
         super()._prepare_after_init(data)
         # Define target origin, relative to which target positions will be generated
-        self.target_coordinates_origin = data.site_xpos[mujoco.mj_name2id(self.mj_model, mujoco.mjtObj.mjOBJ_SITE, self.reach_settings.ref_site)].copy() + jp.array(self.reach_settings.target_origin_rel)  #jp.zeros(3,)
+        ref_site = self._get_ref_site()
+        self.target_coordinates_origin = (
+            data.site_xpos[
+                mujoco.mj_name2id(self.mj_model, mujoco.mjtObj.mjOBJ_SITE, ref_site)
+            ].copy()
+            + jp.array(self.reach_settings.target_origin_rel)
+        )  # jp.zeros(3,)
         for target_obj in self.target_objs:
             target_obj.target_coordinates_origin = self.target_coordinates_origin
             target_obj.target_body_id = self.mj_model.body(target_obj.target_body_name).id

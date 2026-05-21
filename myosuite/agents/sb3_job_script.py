@@ -10,6 +10,7 @@ This is a job script for running SB3 on myosuite tasks.
 import os
 import sys
 import json
+import time
 import myosuite
 import numpy as np
 from omegaconf import OmegaConf
@@ -182,7 +183,10 @@ def train_loop_dreamer(job_data) -> None:
             "algorithm=Dreamer."
         ) from exc
 
-    logdir = f"results_dreamer_{job_data.env}"
+    logdir = getattr(job_data, "logdir", None)
+    if not logdir:
+        # Avoid resuming unrelated runs from a shared fixed directory.
+        logdir = f"results_dreamer_{job_data.env}_{job_data.seed}_{time.time_ns()}"
     args = [
         "--configs", "defaults",
         "--script", "train",

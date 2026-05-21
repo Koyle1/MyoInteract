@@ -11,7 +11,13 @@ from hydra.core.global_hydra import GlobalHydra
 from hydra import initialize, compose
 from ml_collections import ConfigDict
 from myosuite.envs.myo.myouser.base import BaseEnvConfig
-from myosuite.envs.myo.myouser.myouser_universal import UniversalEnvConfig, LIST_CONFIGS, ButtonTarget, PointingTarget
+from myosuite.envs.myo.myouser.myouser_universal import (
+    UniversalEnvConfig,
+    MuscleMimicBimanualEnvConfig,
+    LIST_CONFIGS,
+    ButtonTarget,
+    PointingTarget,
+)
 
 OmegaConf.register_new_resolver("check_string", lambda x: "" if x is None else "-" + str(x))
 
@@ -183,6 +189,7 @@ cs.store(group="vision", name="enabled", node=VisionEnabledConfig)
 cs.store(group="vision", name="disabled", node=VisionDisabledConfig)
 cs.store(group="env", name="base_env_config", node=BaseEnvConfig)
 cs.store(group="env", name="universal", node=UniversalEnvConfig)
+cs.store(group="env", name="musclemimic_bimanual", node=MuscleMimicBimanualEnvConfig)
 cs.store(group="rl", name="rl_config", node=RLConfig)
 cs.store(group="run", name="run", node=RunConfig)
 cs.store(group="rl/network_factory", name="vision", node=VisionNetworkConfig)
